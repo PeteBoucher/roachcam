@@ -11,28 +11,92 @@ def ensure_dir(path):
     os.makedirs(path, exist_ok=True)
 
 
+# ---------------------------------------------------------------------------
+# Camera abstraction — tries picamera2 first, falls back to cv2.VideoCapture
+# ---------------------------------------------------------------------------
+
+class PiCamera2Capture:
+    def __init__(self, width, height, fps):
+        from picamera2 import Picamera2
+        self._cam = Picamera2()
+        cfg = self._cam.create_video_configuration(
+            main={"size": (width, height), "format": "RGB888"},
+            controls={"FrameRate": fps},
+        )
+        self._cam.configure(cfg)
+        self._cam.start()
+
+    def read(self):
+        frame = self._cam.capture_array()
+        return True, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+    def release(self):
+        self._cam.stop()
+
+
+class CV2Capture:
+    def __init__(self, width, height, fps):
+        self._cap = cv2.VideoCapture(0)
+        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        self._cap.set(cv2.CAP_PROP_FPS, fps)
+
+    def isOpened(self):
+        return self._cap.isOpened()
+
+    def read(self):
+        return self._cap.read()
+
+    def release(self):
+        self._cap.release()
+
+
+def open_camera(width, height, fps):
+    try:
+        cam = PiCamera2Capture(width, height, fps)
+        print("Using picamera2.")
+        return cam
+    except Exception:
+        pass
+    cam = CV2Capture(width, height, fps)
+    if not cam.isOpened():
+        return None
+    print("Using cv2.VideoCapture.")
+    return cam
+
+
+# ---------------------------------------------------------------------------
+
 def parse_args():
-    p = argparse.ArgumentParser(description="Motion-sensitive CCTV using laptop camera")
+    p = argparse.ArgumentParser(description="Motion-sensitive CCTV for Raspberry Pi camera module")
     p.add_argument("--min-area", type=int, default=20,
-                   help="Min contour area to count as motion (default 20, tuned for roaches)")
+                   help="Min contour area to count as motion")
     p.add_argument("--max-area", type=int, default=8000,
-                   help="Max contour area — filters out large blobs like shadows or people")
+                   help="Max contour area — filters large blobs")
     p.add_argument("--threshold", type=int, default=15,
-                   help="Pixel diff threshold 0-255 (lower = more sensitive to subtle contrast)")
+                   help="Pixel diff threshold 0-255")
     p.add_argument("--cooldown", type=float, default=5.0,
                    help="Seconds between burst triggers")
     p.add_argument("--pre-frames", type=int, default=3,
-                   help="Frames saved from buffer before motion trigger")
+                   help="Frames buffered before motion trigger")
     p.add_argument("--post-frames", type=int, default=5,
                    help="Frames saved after motion trigger")
     p.add_argument("--save-dir", default="captures",
                    help="Directory to save motion bursts")
-    p.add_argument("--display", action="store_true",
-                   help="Show live video window with motion highlighted (useful for tuning)")
     p.add_argument("--max-contours", type=int, default=10,
-                   help="Max number of motion contours before the frame is ignored (person vs roach)")
+                   help="Max contours before frame is ignored (person vs roach)")
+    p.add_argument("--width", type=int, default=640,
+                   help="Capture width in pixels (lower = faster on Pi Zero)")
+    p.add_argument("--height", type=int, default=480,
+                   help="Capture height in pixels")
+    p.add_argument("--fps", type=int, default=15,
+                   help="Target capture frame rate")
+    p.add_argument("--process-every", type=int, default=2,
+                   help="Only run motion detection on every Nth frame (reduces CPU load)")
+    p.add_argument("--display", action="store_true",
+                   help="Show live window — requires X11 (use with SSH -X or a local display)")
     p.add_argument("--calibrate", action="store_true",
-                   help="Calibration mode: press Enter to start a 10-second area recording session")
+                   help="Calibration mode: press Enter to start a 10-second recording session")
     return p.parse_args()
 
 
@@ -42,6 +106,19 @@ def draw_boxes(frame, contours):
         x, y, w, h = cv2.boundingRect(c)
         cv2.rectangle(out, (x, y), (x + w, y + h), (0, 0, 255), 2)
     return out
+
+
+def detect_motion(frame, background, args):
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (21, 21), 0)
+    cv2.accumulateWeighted(gray, background, 0.2)
+    bg = cv2.convertScaleAbs(background)
+    diff = cv2.absdiff(bg, gray)
+    _, thresh = cv2.threshold(diff, args.threshold, 255, cv2.THRESH_BINARY)
+    thresh = cv2.dilate(thresh, None, iterations=2)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    motion = [c for c in contours if args.min_area < cv2.contourArea(c) < args.max_area]
+    return gray, motion
 
 
 def calibrate(cap, args, background):
@@ -59,18 +136,8 @@ def calibrate(cap, args, background):
         if not ret:
             break
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gray = cv2.GaussianBlur(gray, (21, 21), 0)
-        cv2.accumulateWeighted(gray, background, 0.2)
-        bg = cv2.convertScaleAbs(background)
-
-        diff = cv2.absdiff(bg, gray)
-        _, thresh = cv2.threshold(diff, args.threshold, 255, cv2.THRESH_BINARY)
-        thresh = cv2.dilate(thresh, None, iterations=2)
-
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        areas = sorted([cv2.contourArea(c) for c in contours
-                        if args.min_area < cv2.contourArea(c) < args.max_area], reverse=True)
+        _, motion = detect_motion(frame, background, args)
+        areas = sorted([cv2.contourArea(c) for c in motion], reverse=True)
 
         if areas:
             area_samples.append(areas[0])
@@ -79,7 +146,7 @@ def calibrate(cap, args, background):
                   f"  (all: {[int(a) for a in areas[:5]]})")
 
     if not area_samples:
-        print("\nNo motion detected within min/max-area bounds. Try --min-area 5 --max-area 999999.")
+        print("\nNo motion detected. Try --min-area 5 --max-area 999999.")
         return
 
     area_samples.sort()
@@ -99,16 +166,21 @@ def main():
     args = parse_args()
     ensure_dir(args.save_dir)
 
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        print("ERROR: Could not open camera. Check System Settings -> Privacy & Security.")
+    if args.display:
+        print("NOTE: --display requires a local screen or SSH with X11 forwarding (ssh -X).")
+
+    cam = open_camera(args.width, args.height, args.fps)
+    if cam is None:
+        print("ERROR: Could not open camera.")
+        print("  Pi camera: enable via raspi-config -> Interface Options -> Camera")
+        print("  Verify with: libcamera-hello  (or raspistill -o test.jpg for legacy stack)")
         return
 
-    time.sleep(0.5)
-    ret, frame = cap.read()
+    time.sleep(1.0)
+    ret, frame = cam.read()
     if not ret:
-        print("ERROR: Failed to read from camera.")
-        cap.release()
+        print("ERROR: Failed to read first frame.")
+        cam.release()
         return
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -116,8 +188,8 @@ def main():
     background = gray.copy().astype("float")
 
     if args.calibrate:
-        calibrate(cap, args, background)
-        cap.release()
+        calibrate(cam, args, background)
+        cam.release()
         return
 
     frame_buffer = deque(maxlen=args.pre_frames)
@@ -125,28 +197,25 @@ def main():
     post_remaining = 0
     burst_dir = None
     burst_idx = 0
+    frame_count = 0
 
-    print("Monitoring started. Press Ctrl+C to stop.")
+    print(f"Monitoring started at {args.width}x{args.height} "
+          f"(processing every {args.process_every} frames). Press Ctrl+C to stop.")
 
     try:
         while True:
-            ret, frame = cap.read()
+            ret, frame = cam.read()
             if not ret:
                 break
 
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            gray = cv2.GaussianBlur(gray, (21, 21), 0)
+            frame_count += 1
+            frame_buffer.append(frame.copy())
 
-            cv2.accumulateWeighted(gray, background, 0.2)
-            bg = cv2.convertScaleAbs(background)
+            # skip frames to reduce CPU load on Pi Zero
+            if frame_count % args.process_every != 0:
+                continue
 
-            diff = cv2.absdiff(bg, gray)
-            _, thresh = cv2.threshold(diff, args.threshold, 255, cv2.THRESH_BINARY)
-            thresh = cv2.dilate(thresh, None, iterations=2)
-
-            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            motion = [c for c in contours if args.min_area < cv2.contourArea(c) < args.max_area]
-
+            _, motion = detect_motion(frame, background, args)
             now = time.time()
 
             if motion and len(motion) <= args.max_contours and (now - last_trigger) > args.cooldown:
@@ -168,13 +237,11 @@ def main():
                 burst_idx += 1
                 post_remaining -= 1
 
-            frame_buffer.append(frame.copy())
-
             if args.display:
                 disp = draw_boxes(frame, motion) if motion else frame.copy()
                 area = sum(cv2.contourArea(c) for c in motion)
                 cv2.putText(disp, f"Motion area: {int(area)}", (10, 25),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                 cv2.imshow("RoachCam", disp)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
@@ -182,7 +249,7 @@ def main():
     except KeyboardInterrupt:
         print("Stopped by user.")
 
-    cap.release()
+    cam.release()
     if args.display:
         cv2.destroyAllWindows()
 
