@@ -1,0 +1,6 @@
+captures/
+heatmap*.jpg
+__pycache__/
+*.pyc
+.venv/
+memory/
