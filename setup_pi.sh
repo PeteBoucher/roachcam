@@ -6,7 +6,7 @@ echo "=== RoachCam Pi Setup ==="
 # System packages (pre-compiled OpenCV is the only reliable option on Pi Zero armv6)
 echo "Installing system packages..."
 sudo apt-get update -qq
-sudo apt-get install -y git python3-pip python3-numpy python3-opencv
+sudo apt-get install -y git python3-pip python3-numpy python3-opencv libcamera-apps
 
 # picamera2 is pre-installed on Bullseye/Bookworm — fall back to apt if missing
 if python3 -c "import picamera2" 2>/dev/null; then
@@ -44,7 +44,9 @@ echo "A reboot is required for the camera to activate:"
 echo "  sudo reboot"
 echo ""
 echo "After reboot, verify the camera works:"
-echo "  libcamera-hello --timeout 2000"
+echo "  rpicam-vid --list-cameras"
+echo "  rpicam-hello --timeout 2000   # on Pi OS Trixie/Bookworm"
+echo "  libcamera-hello --timeout 2000  # on older Pi OS"
 echo ""
 echo "Then start monitoring:"
 echo "  cd roachcam && python3 main.py"
