@@ -93,6 +93,8 @@ def parse_args():
                    help="Target capture frame rate")
     p.add_argument("--process-every", type=int, default=2,
                    help="Only run motion detection on every Nth frame (reduces CPU load)")
+    p.add_argument("--rotate", type=int, default=0, choices=[0, 90, 180, 270],
+                   help="Rotate the camera image (use 180 if mounted upside down)")
     p.add_argument("--display", action="store_true",
                    help="Show live window — requires X11 (use with SSH -X or a local display)")
     p.add_argument("--calibrate", action="store_true",
@@ -106,6 +108,19 @@ def draw_boxes(frame, contours):
         x, y, w, h = cv2.boundingRect(c)
         cv2.rectangle(out, (x, y), (x + w, y + h), (0, 0, 255), 2)
     return out
+
+
+ROTATE_CODES = {
+    90:  cv2.ROTATE_90_CLOCKWISE,
+    180: cv2.ROTATE_180,
+    270: cv2.ROTATE_90_COUNTERCLOCKWISE,
+}
+
+
+def apply_rotation(frame, degrees):
+    if degrees == 0:
+        return frame
+    return cv2.rotate(frame, ROTATE_CODES[degrees])
 
 
 def detect_motion(frame, background, args):
@@ -135,6 +150,7 @@ def calibrate(cap, args, background):
         ret, frame = cap.read()
         if not ret:
             break
+        frame = apply_rotation(frame, args.rotate)
 
         _, motion = detect_motion(frame, background, args)
         areas = sorted([cv2.contourArea(c) for c in motion], reverse=True)
@@ -207,6 +223,7 @@ def main():
             ret, frame = cam.read()
             if not ret:
                 break
+            frame = apply_rotation(frame, args.rotate)
 
             frame_count += 1
             frame_buffer.append(frame.copy())
