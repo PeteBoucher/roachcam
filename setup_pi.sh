@@ -6,7 +6,7 @@ echo "=== RoachCam Pi Setup ==="
 # System packages (pre-compiled OpenCV is the only reliable option on Pi Zero armv6)
 echo "Installing system packages..."
 sudo apt-get update -qq
-sudo apt-get install -y git python3-pip python3-opencv
+sudo apt-get install -y git python3-pip python3-numpy python3-opencv
 
 # picamera2 is pre-installed on Bullseye/Bookworm — fall back to apt if missing
 if python3 -c "import picamera2" 2>/dev/null; then
