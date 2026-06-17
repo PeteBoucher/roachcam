@@ -1,4 +1,5 @@
 import argparse
+import glob
 import os
 import threading
 import time
@@ -146,7 +147,29 @@ def parse_args():
                    help="Show live window — requires X11 (use with SSH -X or a local display)")
     p.add_argument("--calibrate", action="store_true",
                    help="Calibration mode: press Enter to start a 10-second recording session")
+    p.add_argument("--min-free-mb", type=int, default=200,
+                   help="Minimum free disk space in MB — oldest bursts are deleted to maintain this")
     return p.parse_args()
+
+
+def free_mb(path):
+    st = os.statvfs(path)
+    return (st.f_bavail * st.f_frsize) // (1024 * 1024)
+
+
+def ensure_free_space(save_dir, min_mb):
+    """Delete oldest bursts until free space exceeds min_mb. Returns False if impossible."""
+    while free_mb(save_dir) < min_mb:
+        bursts = sorted(glob.glob(os.path.join(save_dir, "burst_*")))
+        if not bursts:
+            print(f"WARNING: disk below {min_mb}MB and no bursts to delete — stopping saves.")
+            return False
+        oldest = bursts[0]
+        for f in os.scandir(oldest):
+            os.remove(f.path)
+        os.rmdir(oldest)
+        print(f"Disk space low: deleted {os.path.basename(oldest)}")
+    return True
 
 
 def draw_boxes(frame, contours):
@@ -288,6 +311,8 @@ def main():
             now = time.time()
 
             if motion and len(motion) <= args.max_contours and (now - last_trigger) > args.cooldown:
+                if not ensure_free_space(args.save_dir, args.min_free_mb):
+                    continue
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 burst_dir = os.path.join(args.save_dir, f"burst_{timestamp}")
                 ensure_dir(burst_dir)
