@@ -1,14 +1,61 @@
 import argparse
 import os
+import threading
 import time
 from collections import deque
 from datetime import datetime
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import cv2
 
 
 def ensure_dir(path):
     os.makedirs(path, exist_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# MJPEG stream server — browse to http://<pi-hostname>:8080 on your laptop
+# ---------------------------------------------------------------------------
+
+_stream_frame = None
+_stream_lock = threading.Lock()
+
+
+class _MJPEGHandler(BaseHTTPRequestHandler):
+    def log_message(self, *_):
+        pass  # silence request logs
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+        self.end_headers()
+        try:
+            while True:
+                with _stream_lock:
+                    frame = _stream_frame
+                if frame is not None:
+                    _, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                    data = jpg.tobytes()
+                    self.wfile.write(
+                        b"--frame\r\nContent-Type: image/jpeg\r\n"
+                        f"Content-Length: {len(data)}\r\n\r\n".encode() + data + b"\r\n"
+                    )
+                time.sleep(0.1)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+
+def start_stream_server(port):
+    server = HTTPServer(("", port), _MJPEGHandler)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    print(f"Stream live at http://roachcam.local:{port}")
+
+
+def update_stream(frame):
+    global _stream_frame
+    with _stream_lock:
+        _stream_frame = frame.copy()
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +142,8 @@ def parse_args():
                    help="Only run motion detection on every Nth frame (reduces CPU load)")
     p.add_argument("--rotate", type=int, default=0, choices=[0, 90, 180, 270],
                    help="Rotate the camera image (use 180 if mounted upside down)")
+    p.add_argument("--stream-port", type=int, default=0,
+                   help="Serve an MJPEG stream on this port (e.g. 8080) — browse to http://roachcam.local:8080")
     p.add_argument("--display", action="store_true",
                    help="Show live window — requires X11 (use with SSH -X or a local display)")
     p.add_argument("--calibrate", action="store_true",
@@ -182,6 +231,9 @@ def main():
     args = parse_args()
     ensure_dir(args.save_dir)
 
+    if args.stream_port:
+        start_stream_server(args.stream_port)
+
     if args.display:
         print("NOTE: --display requires a local screen or SSH with X11 forwarding (ssh -X).")
 
@@ -227,6 +279,8 @@ def main():
 
             frame_count += 1
             frame_buffer.append(frame.copy())
+            if args.stream_port:
+                update_stream(frame)
 
             # skip frames to reduce CPU load on Pi Zero
             if frame_count % args.process_every != 0:
