@@ -26,16 +26,42 @@ if [ -f "main.py" ]; then
     echo "Already in roachcam directory — pulling latest..."
     git pull
     git checkout pi-camera
+    REPO_DIR="$(pwd)"
 elif [ -d "roachcam" ]; then
     echo "Updating existing roachcam directory..."
     cd roachcam
     git pull
     git checkout pi-camera
+    REPO_DIR="$(pwd)"
     cd ..
 else
     echo "Cloning roachcam (pi-camera branch)..."
     git clone --branch pi-camera "$REPO_URL"
+    REPO_DIR="$(pwd)/roachcam"
 fi
+
+# Install systemd service
+WHOAMI="$(whoami)"
+echo "Installing systemd service (running as $WHOAMI)..."
+sudo tee /etc/systemd/system/roachcam.service > /dev/null << UNIT
+[Unit]
+Description=RoachCam motion capture
+After=network.target
+
+[Service]
+User=$WHOAMI
+WorkingDirectory=$REPO_DIR
+ExecStart=/usr/bin/python3 $REPO_DIR/main.py --rotate 180 --stream-port 8080
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+sudo systemctl daemon-reload
+sudo systemctl enable roachcam
+echo "Service installed and enabled."
 
 echo ""
 echo "=== Setup complete! ==="
@@ -43,11 +69,10 @@ echo ""
 echo "A reboot is required for the camera to activate:"
 echo "  sudo reboot"
 echo ""
-echo "After reboot, verify the camera works:"
-echo "  rpicam-vid --list-cameras"
-echo "  rpicam-hello --timeout 2000   # on Pi OS Trixie/Bookworm"
-echo "  libcamera-hello --timeout 2000  # on older Pi OS"
+echo "After reboot the service starts automatically. Useful commands:"
+echo "  sudo systemctl status roachcam    # check it's running"
+echo "  sudo journalctl -u roachcam -f    # live logs"
+echo "  sudo systemctl restart roachcam   # restart after config changes"
 echo ""
-echo "Then start monitoring:"
-echo "  cd roachcam && python3 main.py"
-echo "  python3 main.py --process-every 3   # if CPU is struggling"
+echo "Edit /etc/systemd/system/roachcam.service to change flags (e.g. --rotate 180),"
+echo "then run: sudo systemctl daemon-reload && sudo systemctl restart roachcam"
