@@ -36,10 +36,8 @@ class _MJPEGHandler(BaseHTTPRequestHandler):
                 if frame is not None:
                     _, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
                     data = jpg.tobytes()
-                    self.wfile.write(
-                        b"--frame\r\nContent-Type: image/jpeg\r\n"
-                        f"Content-Length: {len(data)}\r\n\r\n".encode() + data + b"\r\n"
-                    )
+                    header = f"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {len(data)}\r\n\r\n".encode()
+                    self.wfile.write(header + data + b"\r\n")
                 time.sleep(0.1)
         except (BrokenPipeError, ConnectionResetError):
             pass
