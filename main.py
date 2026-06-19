@@ -62,7 +62,7 @@ def update_stream(frame):
 # ---------------------------------------------------------------------------
 
 class PiCamera2Capture:
-    def __init__(self, width, height, fps):
+    def __init__(self, width, height, fps, exposure_us=0, gain=0):
         from picamera2 import Picamera2
         self._cam = Picamera2()
         cfg = self._cam.create_video_configuration(
@@ -70,6 +70,13 @@ class PiCamera2Capture:
             controls={"FrameRate": fps},
         )
         self._cam.configure(cfg)
+        if exposure_us > 0 or gain > 0:
+            controls = {"AeEnable": False}
+            if exposure_us > 0:
+                controls["ExposureTime"] = exposure_us
+            if gain > 0:
+                controls["AnalogueGain"] = float(gain)
+            self._cam.set_controls(controls)
         self._cam.start()
 
     def read(self):
@@ -97,9 +104,9 @@ class CV2Capture:
         self._cap.release()
 
 
-def open_camera(width, height, fps):
+def open_camera(width, height, fps, exposure_us=0, gain=0):
     try:
-        cam = PiCamera2Capture(width, height, fps)
+        cam = PiCamera2Capture(width, height, fps, exposure_us, gain)
         print("Using picamera2.")
         return cam
     except Exception:
@@ -149,6 +156,11 @@ def parse_args():
                    help="Calibration mode: press Enter to start a 10-second recording session")
     p.add_argument("--min-free-mb", type=int, default=200,
                    help="Minimum free disk space in MB — oldest bursts are deleted to maintain this")
+    p.add_argument("--exposure-ms", type=int, default=0,
+                   help="Manual exposure time in milliseconds — disables auto-exposure (0=auto). "
+                        "Try 100-500 with an IR illuminator")
+    p.add_argument("--gain", type=float, default=0,
+                   help="Manual analogue gain 1.0-16.0 — higher = brighter but more noise (0=auto)")
     return p.parse_args()
 
 
@@ -258,7 +270,8 @@ def main():
     if args.display:
         print("NOTE: --display requires a local screen or SSH with X11 forwarding (ssh -X).")
 
-    cam = open_camera(args.width, args.height, args.fps)
+    cam = open_camera(args.width, args.height, args.fps,
+                      exposure_us=args.exposure_ms * 1000, gain=args.gain)
     if cam is None:
         print("ERROR: Could not open camera.")
         print("  Pi camera: enable via raspi-config -> Interface Options -> Camera")
