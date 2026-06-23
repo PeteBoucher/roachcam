@@ -14,22 +14,35 @@ def parse_args():
     p.add_argument("--alpha", type=float, default=0.6, help="Heatmap overlay opacity (0-1)")
     p.add_argument("--skip-first", type=int, default=0, help="Skip this many burst folders from the start")
     p.add_argument("--skip-last", type=int, default=0, help="Skip this many burst folders from the end")
+    p.add_argument("--from", dest="from_time", default=None,
+                   help="Only include bursts at or after this timestamp, e.g. 20260616_2324")
+    p.add_argument("--to", dest="to_time", default=None,
+                   help="Only include bursts up to this timestamp, e.g. 20260617_0600")
     p.add_argument("--min-displacement", type=int, default=20,
                    help="Min pixels a target must move within a burst to draw a trail")
     p.add_argument("--edge-margin", type=int, default=60,
                    help="Entry map: only plot burst starts within this many px of a floor-level edge (0=off)")
     p.add_argument("--floor-zone", type=float, default=0.55,
                    help="Fraction of frame height (from bottom) to treat as floor for edge detection")
+    p.add_argument("--hour-from", type=int, default=None,
+                   help="Only include bursts at or after this hour of day 0-23 (wraps midnight, e.g. 22)")
+    p.add_argument("--hour-to", type=int, default=None,
+                   help="Only include bursts before this hour of day 0-23 (e.g. 7 to keep until 07:00)")
     return p.parse_args()
 
 
 def load_reference(bursts):
     for burst in bursts:
         path = os.path.join(burst, "pre_00.jpg")
-        if os.path.exists(path):
+        if os.path.exists(path) and os.path.getsize(path) > 0:
             return cv2.imread(path)
-    candidates = sorted(glob.glob(os.path.join(bursts[0], "motion_*.jpg")))
-    return cv2.imread(candidates[0]) if candidates else None
+    for burst in bursts:
+        for path in sorted(glob.glob(os.path.join(burst, "motion_*.jpg"))):
+            if os.path.getsize(path) > 0:
+                img = cv2.imread(path)
+                if img is not None:
+                    return img
+    return None
 
 
 def extract_detection_boxes(frame):
@@ -160,18 +173,79 @@ def draw_trails(image, bursts, min_displacement=20):
     return out
 
 
+def make_contact_sheet(bursts, thumb_w=320, thumb_h=240, cols=4):
+    """Tile the first motion frame from each burst into a labelled grid."""
+    thumbs = []
+    for burst in bursts:
+        frames = sorted(glob.glob(os.path.join(burst, "motion_*.jpg")))
+        if not frames:
+            frames = sorted(glob.glob(os.path.join(burst, "pre_*.jpg")))
+        if not frames:
+            continue
+        img = cv2.imread(frames[0])
+        if img is None:
+            continue
+        img = cv2.resize(img, (thumb_w, thumb_h))
+        label = os.path.basename(burst).replace("burst_", "")
+        cv2.rectangle(img, (0, thumb_h - 22), (thumb_w, thumb_h), (0, 0, 0), -1)
+        cv2.putText(img, label, (4, thumb_h - 6),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+        thumbs.append(img)
+
+    if not thumbs:
+        return None
+
+    rows = (len(thumbs) + cols - 1) // cols
+    # pad to full grid
+    blank = np.zeros((thumb_h, thumb_w, 3), dtype=np.uint8)
+    while len(thumbs) % cols:
+        thumbs.append(blank)
+
+    grid_rows = [np.hstack(thumbs[i * cols:(i + 1) * cols]) for i in range(rows)]
+    return np.vstack(grid_rows)
+
+
 def main():
     args = parse_args()
 
     bursts = sorted(glob.glob(os.path.join(args.captures_dir, "burst_*")))
     total = len(bursts)
-    start = args.skip_first
-    end = total - args.skip_last if args.skip_last > 0 else total
-    bursts = bursts[start:end]
-    print(f"Using {len(bursts)} of {total} bursts "
-          f"(skipping {args.skip_first} from start, {args.skip_last} from end)")
-    for b in bursts:
-        print(f"  {os.path.basename(b)}")
+
+    def burst_ts(path):
+        return os.path.basename(path).replace("burst_", "").replace("_", "")
+
+    if args.from_time:
+        from_key = args.from_time.replace("_", "")
+        bursts = [b for b in bursts if burst_ts(b) >= from_key]
+    if args.to_time:
+        to_key = args.to_time.replace("_", "")
+        bursts = [b for b in bursts if burst_ts(b) <= to_key]
+
+    # time-of-day filter (wraps midnight when hour_from > hour_to)
+    if args.hour_from is not None or args.hour_to is not None:
+        hf = args.hour_from if args.hour_from is not None else 0
+        ht = args.hour_to if args.hour_to is not None else 24
+        def in_night_window(path):
+            name = os.path.basename(path).replace("burst_", "")  # YYYYMMDD_HHMMSS
+            hour = int(name[9:11])
+            if hf <= ht:
+                return hf <= hour < ht
+            else:  # wraps midnight
+                return hour >= hf or hour < ht
+        bursts = [b for b in bursts if in_night_window(b)]
+
+    # skip-first/skip-last apply within the time-filtered window
+    if args.skip_first:
+        bursts = bursts[args.skip_first:]
+    if args.skip_last:
+        bursts = bursts[:-args.skip_last]
+
+    print(f"Using {len(bursts)} of {total} bursts"
+          + (f" from {args.from_time}" if args.from_time else "")
+          + (f" to {args.to_time}" if args.to_time else "")
+          + (f", hours {args.hour_from:02d}:00-{args.hour_to:02d}:00" if args.hour_from is not None or args.hour_to is not None else "")
+          + (f", skipping first {args.skip_first}" if args.skip_first else "")
+          + (f", skipping last {args.skip_last}" if args.skip_last else ""))
     if not bursts:
         print(f"No burst folders found in {args.captures_dir}/")
         sys.exit(1)
@@ -249,6 +323,12 @@ def main():
     print(f"Heatmap saved to {args.output}")
     hot = np.unravel_index(np.argmax(accumulator), accumulator.shape)
     print(f"Hottest pixel: x={hot[1]}, y={hot[0]}  (hit {int(accumulator[hot])} times)")
+
+    sheet = make_contact_sheet(bursts)
+    if sheet is not None:
+        sheet_path = args.output.replace(".jpg", "_sheet.jpg")
+        cv2.imwrite(sheet_path, sheet)
+        print(f"Contact sheet saved to {sheet_path}")
 
 
 if __name__ == "__main__":

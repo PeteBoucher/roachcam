@@ -188,7 +188,7 @@ def draw_boxes(frame, contours):
     out = frame.copy()
     for c in contours:
         x, y, w, h = cv2.boundingRect(c)
-        cv2.rectangle(out, (x, y), (x + w, y + h), (0, 0, 255), 2)
+        cv2.rectangle(out, (x, y), (x + w, y + h), (0, 0, 255), 1)
     return out
 
 
@@ -234,7 +234,7 @@ def calibrate(cap, args, background):
             break
         frame = apply_rotation(frame, args.rotate)
 
-        _, motion = detect_motion(frame, background, args)
+        _, motion = detect_motion(frame, background, arg s)
         areas = sorted([cv2.contourArea(c) for c in motion], reverse=True)
 
         if areas:
@@ -332,7 +332,9 @@ def main():
                 print(f"Motion detected! Saving burst -> {burst_dir}/")
 
                 for i, pre in enumerate(frame_buffer):
-                    cv2.imwrite(os.path.join(burst_dir, f"pre_{i:02d}.jpg"), pre)
+                    ok = cv2.imwrite(os.path.join(burst_dir, f"pre_{i:02d}.jpg"), pre)
+                    if not ok:
+                        print(f"WARNING: failed to write pre_{i:02d}.jpg")
 
                 burst_idx = 0
                 post_remaining = args.post_frames
@@ -340,7 +342,10 @@ def main():
 
             if post_remaining > 0:
                 annotated = draw_boxes(frame, motion)
-                cv2.imwrite(os.path.join(burst_dir, f"motion_{burst_idx:02d}.jpg"), annotated)
+                path = os.path.join(burst_dir, f"motion_{burst_idx:02d}.jpg")
+                ok = cv2.imwrite(path, annotated)
+                if not ok:
+                    print(f"WARNING: failed to write motion_{burst_idx:02d}.jpg")
                 burst_idx += 1
                 post_remaining -= 1
 
