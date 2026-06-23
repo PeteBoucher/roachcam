@@ -234,7 +234,7 @@ def calibrate(cap, args, background):
             break
         frame = apply_rotation(frame, args.rotate)
 
-        _, motion = detect_motion(frame, background, arg s)
+        _, motion = detect_motion(frame, background, args)
         areas = sorted([cv2.contourArea(c) for c in motion], reverse=True)
 
         if areas:
