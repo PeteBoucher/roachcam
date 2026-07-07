@@ -20,6 +20,7 @@ def ensure_dir(path):
 
 _stream_frame = None
 _stream_lock = threading.Lock()
+_save_dir = "captures"
 
 
 class _MJPEGHandler(BaseHTTPRequestHandler):
@@ -27,6 +28,12 @@ class _MJPEGHandler(BaseHTTPRequestHandler):
         pass  # silence request logs
 
     def do_GET(self):
+        if self.path.rstrip("/") in ("/heatmap.jpg", "/heatmap"):
+            self._serve_heatmap()
+        else:
+            self._serve_mjpeg()
+
+    def _serve_mjpeg(self):
         self.send_response(200)
         self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
         self.end_headers()
@@ -43,8 +50,25 @@ class _MJPEGHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    def _serve_heatmap(self):
+        for name in ("heatmap_combined.jpg", "heatmap.jpg"):
+            path = os.path.join(_save_dir, name)
+            if os.path.exists(path):
+                data = open(path, "rb").read()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                self.wfile.write(data)
+                return
+        self.send_response(404)
+        self.end_headers()
 
-def start_stream_server(port):
+
+def start_stream_server(port, save_dir):
+    global _save_dir
+    _save_dir = save_dir
     server = HTTPServer(("", port), _MJPEGHandler)
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
@@ -265,7 +289,7 @@ def main():
     ensure_dir(args.save_dir)
 
     if args.stream_port:
-        start_stream_server(args.stream_port)
+        start_stream_server(args.stream_port, args.save_dir)
 
     if args.display:
         print("NOTE: --display requires a local screen or SSH with X11 forwarding (ssh -X).")
