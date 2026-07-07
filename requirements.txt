@@ -1,1 +1,8 @@
-opencv-python
+# Pi Zero (armv6) has no pip wheels for opencv or numpy.
+# Do NOT use pip install -r requirements.txt on a Pi.
+# Use the setup script instead:
+#
+#   bash setup_pi.sh
+#
+# Which installs via apt:
+#   python3-opencv python3-numpy python3-picamera2
