@@ -5,7 +5,7 @@ import threading
 import time
 from collections import deque
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import cv2
 
@@ -69,7 +69,7 @@ class _MJPEGHandler(BaseHTTPRequestHandler):
 def start_stream_server(port, save_dir):
     global _save_dir
     _save_dir = save_dir
-    server = HTTPServer(("", port), _MJPEGHandler)
+    server = ThreadingHTTPServer(("", port), _MJPEGHandler)
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
     print(f"Stream live at http://roachcam.local:{port}")
