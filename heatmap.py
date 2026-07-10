@@ -47,10 +47,13 @@ def load_reference(bursts):
 
 def extract_detection_boxes(frame):
     """Pull bounding rectangles from the red boxes drawn by main.py."""
+    r = frame[:, :, 2].astype(np.float32)
+    g = frame[:, :, 1].astype(np.float32)
+    b = frame[:, :, 0].astype(np.float32)
     red_mask = (
-        (frame[:, :, 2] > 200) &
-        (frame[:, :, 1] < 50) &
-        (frame[:, :, 0] < 50)
+        (r > 100) &
+        (r > g * 1.5) &
+        (r > b * 1.5)
     ).astype(np.uint8)
     contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     return [cv2.boundingRect(c) for c in contours if cv2.contourArea(c) > 4]
