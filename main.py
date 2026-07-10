@@ -212,7 +212,7 @@ def draw_boxes(frame, contours):
     out = frame.copy()
     for c in contours:
         x, y, w, h = cv2.boundingRect(c)
-        cv2.rectangle(out, (x, y), (x + w, y + h), (0, 0, 255), 1)
+        cv2.rectangle(out, (x, y), (x + w, y + h), (0, 0, 255), 3)
     return out
 
 
