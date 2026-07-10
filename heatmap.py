@@ -1,5 +1,6 @@
 import argparse
 import glob
+import json
 import os
 import sys
 
@@ -45,6 +46,15 @@ def load_reference(bursts):
     return None
 
 
+def load_detections(burst_path):
+    """Load per-frame bounding boxes from detections.json if present."""
+    path = os.path.join(burst_path, "detections.json")
+    if os.path.exists(path):
+        with open(path) as f:
+            return json.load(f)
+    return None
+
+
 def extract_detection_boxes(frame):
     """Pull bounding rectangles from the red boxes drawn by main.py."""
     r = frame[:, :, 2].astype(np.float32)
@@ -59,22 +69,33 @@ def extract_detection_boxes(frame):
     return [cv2.boundingRect(c) for c in contours if cv2.contourArea(c) > 4]
 
 
+def boxes_to_centroid(boxes):
+    total_area = sum(bw * bh for _, _, bw, bh in boxes)
+    if total_area == 0:
+        return None
+    cx = int(sum((x + bw / 2) * (bw * bh) for x, _, bw, bh in boxes) / total_area)
+    cy = int(sum((y + bh / 2) * (bw * bh) for _, y, bw, bh in boxes) / total_area)
+    return cx, cy
+
+
 def burst_trail(burst_path):
     """Return ordered (cx, cy) centroids across a burst's motion frames."""
+    detections = load_detections(burst_path)
     trail = []
     for path in sorted(glob.glob(os.path.join(burst_path, "motion_*.jpg"))):
-        frame = cv2.imread(path)
-        if frame is None:
-            continue
-        boxes = extract_detection_boxes(frame)
+        frame_key = os.path.basename(path).replace(".jpg", "")
+        if detections is not None:
+            boxes = [tuple(b) for b in detections.get(frame_key, [])]
+        else:
+            frame = cv2.imread(path)
+            if frame is None:
+                continue
+            boxes = extract_detection_boxes(frame)
         if not boxes:
             continue
-        total_area = sum(bw * bh for _, _, bw, bh in boxes)
-        if total_area == 0:
-            continue
-        cx = int(sum((x + bw / 2) * (bw * bh) for x, _, bw, bh in boxes) / total_area)
-        cy = int(sum((y + bh / 2) * (bw * bh) for _, y, bw, bh in boxes) / total_area)
-        trail.append((cx, cy))
+        pt = boxes_to_centroid(boxes)
+        if pt:
+            trail.append(pt)
     return trail
 
 
@@ -264,15 +285,18 @@ def main():
     box_count = 0
 
     for burst in bursts:
-        motion_frames = sorted(glob.glob(os.path.join(burst, "motion_*.jpg")))
-        for path in motion_frames:
-            frame = cv2.imread(path)
-            if frame is None:
-                continue
-            if frame.shape[:2] != (h, w):
-                frame = cv2.resize(frame, (w, h))
-
-            boxes = extract_detection_boxes(frame)
+        detections = load_detections(burst)
+        for path in sorted(glob.glob(os.path.join(burst, "motion_*.jpg"))):
+            frame_key = os.path.basename(path).replace(".jpg", "")
+            if detections is not None:
+                boxes = [tuple(b) for b in detections.get(frame_key, [])]
+            else:
+                frame = cv2.imread(path)
+                if frame is None:
+                    continue
+                if frame.shape[:2] != (h, w):
+                    frame = cv2.resize(frame, (w, h))
+                boxes = extract_detection_boxes(frame)
             for x, y, bw, bh in boxes:
                 accumulator[y:y + bh, x:x + bw] += 1
             box_count += len(boxes)

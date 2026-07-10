@@ -1,5 +1,6 @@
 import argparse
 import glob
+import json
 import os
 import threading
 import time
@@ -323,6 +324,7 @@ def main():
     post_remaining = 0
     burst_dir = None
     burst_idx = 0
+    burst_detections = {}
     frame_count = 0
 
     print(f"Monitoring started at {args.width}x{args.height} "
@@ -361,17 +363,27 @@ def main():
                         print(f"WARNING: failed to write pre_{i:02d}.jpg")
 
                 burst_idx = 0
+                burst_detections = {}
                 post_remaining = args.post_frames
                 last_trigger = now
 
             if post_remaining > 0:
                 annotated = draw_boxes(frame, motion)
-                path = os.path.join(burst_dir, f"motion_{burst_idx:02d}.jpg")
+                frame_key = f"motion_{burst_idx:02d}"
+                path = os.path.join(burst_dir, f"{frame_key}.jpg")
                 ok = cv2.imwrite(path, annotated)
                 if not ok:
-                    print(f"WARNING: failed to write motion_{burst_idx:02d}.jpg")
+                    print(f"WARNING: failed to write {frame_key}.jpg")
+                burst_detections[frame_key] = [
+                    [int(x), int(y), int(w), int(h)]
+                    for x, y, w, h in [cv2.boundingRect(c) for c in motion]
+                ]
                 burst_idx += 1
                 post_remaining -= 1
+                if post_remaining == 0:
+                    det_path = os.path.join(burst_dir, "detections.json")
+                    with open(det_path, "w") as f:
+                        json.dump(burst_detections, f)
 
             if args.display:
                 disp = draw_boxes(frame, motion) if motion else frame.copy()
